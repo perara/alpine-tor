@@ -107,6 +107,12 @@ module Service
                                  "--CircuitBuildTimeout #{circuit_build_timeout}",
                                  "--DataDirectory #{data_directory}",
                                  "--PidFile #{pid_file}",
+                                 "--NumEntryGuards 8",
+                                 "--ExitRelay 0",
+                                 "--RefuseUnknownExits 0",
+                                 "--ClientOnly 1",
+                                 "--StrictNodes 1",
+                                 "--AllowSingleHopCircuits 1",
                                  "--Log \"warn syslog\"",
                                  '--RunAsDaemon 1',
                                  "| logger -t 'tor' 2>&1")
