@@ -1,17 +1,21 @@
 global
   daemon
+  maxconn 50000
   user root
   group root
   pidfile <%= pid_file %>
 
 defaults
-  mode http
-  maxconn 50000
-  timeout client 3600s
-  timeout connect 1s
-  timeout queue 5s
-  timeout server 3600s
-
+  #mode http
+  #timeout client 3600s
+  #timeout connect 1s
+  #timeout queue 5s
+  #timeout server 3600s
+  mode              tcp
+  timeout connect   5000ms
+  timeout client    15000ms
+  timeout server    15000ms
+  retries           0
 
 listen stats
   bind *:<%= stats %>
