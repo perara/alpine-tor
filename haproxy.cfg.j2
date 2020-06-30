@@ -1,0 +1,33 @@
+global
+  daemon
+  maxconn {{ maxconn }}
+  user root
+  group root
+  pidfile {{ pid_file }}
+
+defaults
+  mode              tcp
+  timeout connect   {{ timeout_connect }}
+  timeout client    {{ timeout_client }}
+  timeout server    {{ timeout_server }}
+  retries           {{ retries }}
+
+listen stats
+  bind *:{{ stats_port }}
+  mode http
+  stats enable
+  stats uri /
+  stats auth {{ stats_user }}:{{ stats_pass }}
+
+
+listen TOR-in
+  bind *:{{ socks5_port }}
+  mode tcp
+  default_backend TOR
+  balance roundrobin
+
+backend TOR
+  mode tcp
+  {%- for proxy in proxies %}
+  server {{ proxy[0] }}:{{ proxy[1] }} {{ proxy[0] }}:{{ proxy[1] }} check
+  {%- endfor %}
