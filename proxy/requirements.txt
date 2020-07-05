@@ -2,3 +2,4 @@ python-dotenv
 jinja2
 pyOpenSSL
 stem
+pysocks

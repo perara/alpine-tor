@@ -179,8 +179,8 @@ class Tor:
 
     def _update_ip(self):
         response = requests.get("https://api.ipify.org", proxies=dict(
-            http=f"http://127.0.0.1:{self.port}",
-            https=f"http://127.0.0.1:{self.port}"
+            http=f"socks5://127.0.0.1:{self.port}",
+            https=f"socks5://127.0.0.1:{self.port}"
         ))
         self.latency = response.elapsed.total_seconds()
         self.ip_address = response.text
