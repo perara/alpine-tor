@@ -19,15 +19,24 @@ listen stats
   stats uri /
   stats auth {{ stats_user }}:{{ stats_pass }}
 
-
-listen TOR-in
-  bind *:{{ socks5_port }}
+{%- for k, group in groups.items() %}
+listen TOR-{{ group.id }}-in
+  bind 0.0.0.0:{{ group.port }}
+  bind :::{{ group.port }}
   mode tcp
-  default_backend TOR
+  default_backend TOR-{{ group.id }}
   balance roundrobin
+{%- endfor %}
 
-backend TOR
+{%- for k, group in groups.items() %}
+backend TOR-{{ group.id }}
   mode tcp
-  {%- for proxy in proxies %}
+  {%- for proxy in group.proxies %}
   server {{ proxy[0] }}:{{ proxy[1] }} {{ proxy[0] }}:{{ proxy[1] }} check
   {%- endfor %}
+
+{%- endfor %}
+
+
+
+
