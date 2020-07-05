@@ -13,6 +13,7 @@ import os
 from OpenSSL import crypto, SSL
 from stem.process import launch_tor
 import pathlib
+current_dir = pathlib.Path(__file__).parent
 
 if os.environ["HAPROXY_CONFIG_DIR"] == "":
     c_dir = pathlib.Path(__file__).parent
@@ -224,7 +225,7 @@ class HAProxy:
         self.process = None
         self.pid_file = os.path.join(c_dir, "haproxy", "haproxy.pid")
         self.socket = os.path.join(c_dir, "haproxy", "haproxy.socket")
-        self.config_template = os.path.join(c_dir, "haproxy.cfg.j2")
+        self.config_template = os.path.join(current_dir, "haproxy.cfg.j2")
         self.config = os.path.join(c_dir, "haproxy", "haproxy.cfg")
         self.ssl_pem = os.path.join(c_dir, "haproxy", "server.pem")
         self.private_key = os.path.join(c_dir, "haproxy", "server.key")
