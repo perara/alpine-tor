@@ -19,6 +19,8 @@ if os.environ["HAPROXY_CONFIG_DIR"] == "":
 
 else:
     c_dir = os.environ["HAPROXY_CONFIG_DIR"]
+    if not os.path.exists(c_dir):
+        os.makedirs(c_dir, exist_ok=True)
 
 os.makedirs(os.path.join(c_dir, "tor"), exist_ok=True)
 os.makedirs(os.path.join(c_dir, "haproxy"), exist_ok=True)
