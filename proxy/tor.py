@@ -206,7 +206,7 @@ class Tor:
              "--StrictNodes",  "1",
             # "--ExcludeSingleHopRelays", "0", # TODO - install old
             # "--AllowSingleHopCircuits",  "1", # TODO obsolete
-            "--Log", "debug",
+            # "--Log", "debug",
             # "--RunAsDaemon", "1",
         ], take_ownership=True)
         self.process.stdout = sys.stdout
