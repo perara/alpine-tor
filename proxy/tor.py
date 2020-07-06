@@ -152,7 +152,7 @@ class TorPool(Thread):
                     # Check if the IP is now unique
                     instance = self.invalids[idx]
                     alike = [x for x in self.instances.values() if x.ip_address == instance.ip_address]
-                    print(alike)
+
 
                     if len(alike) <= 0:
                         self.instances[instance.socks_port] = instance
@@ -279,7 +279,7 @@ class Tor:
         data = netcat("127.0.0.1", self.control_port, command)
         time.sleep(2)
         self._update_ip()
-        _LOGGER.info("ip-renew: before=%s,after=%s", current_ip, self.ip_address)
+        #_LOGGER.info("ip-renew: before=%s,after=%s", current_ip, self.ip_address)
         return current_ip != self.ip_address
 
     def __str__(self):
