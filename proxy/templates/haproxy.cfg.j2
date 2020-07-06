@@ -1,0 +1,42 @@
+global
+    daemon
+    maxconn {{ maxconn }}
+    user root
+    group root
+    pidfile {{ pid_file }}
+
+defaults
+    mode              tcp
+    timeout connect   {{ timeout_connect }}
+    timeout client    {{ timeout_client }}
+    timeout server    {{ timeout_server }}
+    retries           {{ retries }}
+
+listen stats
+    bind *:{{ stats_port }}
+    mode http
+    stats enable
+    stats uri /
+    stats show-node
+    stats auth {{ stats_user }}:{{ stats_pass }}
+
+{%- for k, group in groups.items() %}
+listen TOR-{{ group.id }}-in
+    bind 0.0.0.0:{{ group.port }}
+    bind :::{{ group.port }}
+    mode tcp
+    default_backend TOR-{{ group.id }}
+{%- endfor %}
+
+{%- for k, group in groups.items() %}
+backend TOR-{{ group.id }}
+    balance roundrobin
+    mode tcp
+    {%- for proxy in group.proxies %}
+    server {{ proxy[0] }}:{{ proxy[1] }} {{ proxy[0] }}:{{ proxy[1] }}
+    {%- endfor %}
+{%- endfor %}
+
+
+
+
