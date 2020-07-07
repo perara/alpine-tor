@@ -147,7 +147,7 @@ class TorPool(Thread):
 
             if len(self.invalids) > 0:
                 num_invalid_start = len(self.invalids)
-                with ThreadPoolExecutor() as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.map(refresh, [(idx, instance) for idx, instance in enumerate(self.invalids)])
 
                 for_deletion = []
