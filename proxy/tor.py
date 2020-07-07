@@ -136,9 +136,12 @@ class TorPool(Thread):
     def _refresh_invalids(self):
 
         def refresh(args):
-            idx, instance = args
-            is_ok = instance.renew()
-            return is_ok, idx
+            try:
+                idx, instance = args
+                is_ok = instance.renew()
+                return is_ok, idx
+            except:
+                return False, idx
 
         while True:
 
