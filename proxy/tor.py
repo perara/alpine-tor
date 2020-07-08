@@ -156,7 +156,6 @@ class TorPool(Thread):
                     instance = self.invalids[idx]
                     alike = [x for x in self.instances.values() if x.ip_address == instance.ip_address]
 
-
                     if len(alike) <= 0:
                         self.instances[instance.socks_port] = instance
                         for_deletion.append(idx)
@@ -235,7 +234,6 @@ class Tor:
         self.is_privoxy = os.getenv("TOR_HTTP_PRIVOXY") == '1'
 
         os.makedirs(self.data_dir, exist_ok=True)
-
 
         if self.is_http:
             self.proxies = dict(
