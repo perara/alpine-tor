@@ -1,7 +1,7 @@
 FROM alpine:edge
 
 RUN mkdir -p /app
-COPY proxy/* /app/
+COPY proxy /app
 
 
 RUN apk add 'tor' --no-cache \
