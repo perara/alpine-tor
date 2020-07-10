@@ -99,6 +99,7 @@ class TorPool(Thread):
         self.n_groups = groups
 
         self.haproxy = None
+        self.build_haproxy()
 
     def build_haproxy(self):
         self.haproxy = HAProxy()
