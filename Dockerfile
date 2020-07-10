@@ -2,7 +2,7 @@ FROM alpine:edge
 
 RUN mkdir -p /app
 COPY proxy /app
-
+COPY proxy/templates /app/templates
 
 RUN apk add 'tor' --no-cache \
   --repository http://dl-cdn.alpinelinux.org/alpine/edge/community \
