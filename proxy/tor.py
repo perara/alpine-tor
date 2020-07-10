@@ -99,7 +99,7 @@ class TorPool(Thread):
         self.n_groups = groups
 
         self.haproxy = None
-        self.build_haproxy()
+
     def build_haproxy(self):
         self.haproxy = HAProxy()
         for group in range(self.n_groups):
@@ -140,8 +140,9 @@ class TorPool(Thread):
 
     def _refresh_invalids(self):
 
-        def refresh(idx, instance):
+        def refresh(args):
             try:
+                idx, instance = args
                 is_ok = instance.renew_old()
                 return is_ok, idx
             except:
@@ -151,10 +152,11 @@ class TorPool(Thread):
 
             if len(self.invalids) > 0:
                 num_invalid_start = len(self.invalids)
-                for_deletion = []
-                for idx, instance in enumerate(self.invalids):
-                    refresh(idx, instance)
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.map(refresh, [(idx, instance) for idx, instance in enumerate(self.invalids)])
 
+                for_deletion = []
+                for is_ok, idx in future:
                     # Check if the IP is now unique
                     instance = self.invalids[idx]
                     alike = [x for x in self.instances.values() if x.ip_address == instance.ip_address]
@@ -162,9 +164,6 @@ class TorPool(Thread):
                     if len(alike) <= 0:
                         self.instances[instance.socks_port] = instance
                         for_deletion.append(idx)
-
-                    time.sleep(30)  # TODO. try to chill down polling.
-                    break
 
                 for idx in for_deletion:
                     try:
@@ -239,7 +238,7 @@ class Tor:
 
         self.is_http = os.getenv("TOR_HTTP") == '1'
         self.is_privoxy = os.getenv("TOR_HTTP_PRIVOXY") == '1'
-        self.kill()
+
         os.makedirs(self.data_dir, exist_ok=True)
 
         if self.is_http:
@@ -350,14 +349,9 @@ class Tor:
         return self
 
     def kill(self):
-        try:
-            os.kill(self.process.pid, 9)
-        except:
-            pass
-        try:
-            shutil.rmtree(self.circuit_dir)
-        except:
-            pass
+        os.kill(self.process.pid, 9)
+        shutil.rmtree(self.circuit_dir)
+
     def status(self):
         pass
 
