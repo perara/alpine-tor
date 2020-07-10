@@ -1,4 +1,5 @@
 import random
+import shutil
 import subprocess
 from concurrent.futures.thread import ThreadPoolExecutor
 
@@ -97,6 +98,9 @@ class TorPool(Thread):
         self.instances = {}  # control_port, instance
         self.n_groups = groups
 
+        self.haproxy = None
+        self.build_haproxy()
+    def build_haproxy(self):
         self.haproxy = HAProxy()
         for group in range(self.n_groups):
             for i in range(self.n_instances):
@@ -106,6 +110,7 @@ class TorPool(Thread):
                                        tor.http_port if tor.is_http else tor.socks_port)
         self.haproxy.generate_config()
         self.haproxy.start()
+
 
     def run(self) -> None:
 
@@ -135,10 +140,9 @@ class TorPool(Thread):
 
     def _refresh_invalids(self):
 
-        def refresh(args):
+        def refresh(idx, instance):
             try:
-                idx, instance = args
-                is_ok = instance.renew()
+                is_ok = instance.renew_old()
                 return is_ok, idx
             except:
                 return False, idx
@@ -147,11 +151,10 @@ class TorPool(Thread):
 
             if len(self.invalids) > 0:
                 num_invalid_start = len(self.invalids)
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.map(refresh, [(idx, instance) for idx, instance in enumerate(self.invalids)])
-
                 for_deletion = []
-                for is_ok, idx in future:
+                for idx, instance in enumerate(self.invalids):
+                    refresh(idx, instance)
+
                     # Check if the IP is now unique
                     instance = self.invalids[idx]
                     alike = [x for x in self.instances.values() if x.ip_address == instance.ip_address]
@@ -159,6 +162,9 @@ class TorPool(Thread):
                     if len(alike) <= 0:
                         self.instances[instance.socks_port] = instance
                         for_deletion.append(idx)
+
+                    time.sleep(30)  # TODO. try to chill down polling.
+                    break
 
                 for idx in for_deletion:
                     try:
@@ -216,6 +222,7 @@ class Tor:
         self.latency = None
 
         self.data_dir = os.path.join(c_dir, "tor", str(Tor.PROCESS_COUNT))
+        self.circuit_dir = os.path.join(self.data_dir, "circuit")
         self.tor_conf = os.path.join(self.data_dir, "torrc")
         self.privoxy_conf = os.path.join(self.data_dir, "privoxy.cfg")
 
@@ -232,7 +239,7 @@ class Tor:
 
         self.is_http = os.getenv("TOR_HTTP") == '1'
         self.is_privoxy = os.getenv("TOR_HTTP_PRIVOXY") == '1'
-
+        self.kill()
         os.makedirs(self.data_dir, exist_ok=True)
 
         if self.is_http:
@@ -273,9 +280,16 @@ class Tor:
     def renew_threaded(self):
         return self.renew()
 
-    def renew(self):
+    def renew(self): # TODO
+        self.kill()
         current_ip = self.ip_address
+        self.start(start_privoxy=False)
+        print(current_ip, self.ip_address)
+        return current_ip == self.ip_address
 
+
+    def renew_old(self):
+        current_ip = self.ip_address
         command = "authenticate ""\nsignal newnym\nquit"
         data = netcat("127.0.0.1", self.control_port, command)
         time.sleep(2)
@@ -303,7 +317,7 @@ class Tor:
         return result
 
     @threaded
-    def start(self):
+    def start(self, start_privoxy=True):
         if self.is_privoxy:
             privoxy = subprocess.Popen([
                 "privoxy", self.privoxy_conf
@@ -316,8 +330,8 @@ class Tor:
                 "--NewCircuitPeriod", os.getenv("TOR_NEW_CIRCUIT_PERIOD"),
                 "--MaxCircuitDirtiness", os.getenv("TOR_MAX_CIRCUIT_DIRTINESS"),
                 "--CircuitBuildTimeout", os.getenv("TOR_CIRCUIT_BUILD_TIMEOUT"),
-                "--DataDirectory", self.data_dir,
-                # "--PidFile",  #{pid_file}",
+                "--DataDirectory", self.circuit_dir,
+                #"--PidFile",  #{pid_file}",
                 "--NumEntryGuards", os.getenv("TOR_NUM_ENTRY_GUARDS"),
                 "--ExitRelay", "0",
                 "--RefuseUnknownExits", "0",
@@ -335,6 +349,15 @@ class Tor:
         self._update_ip()
         return self
 
+    def kill(self):
+        try:
+            os.kill(self.process.pid, 9)
+        except:
+            pass
+        try:
+            shutil.rmtree(self.circuit_dir)
+        except:
+            pass
     def status(self):
         pass
 
@@ -408,17 +431,23 @@ class HAProxy:
         with open(self.config, "w") as f:
             f.write(config)
 
-    def start(self):
+    def clear_groups(self):
+        self.groups.clear()
+
+    def stop(self):
         with open(self.pid_file, "w") as f:
             f.write("")
 
         os.system("killall haproxy")
+
+    def start(self):
+        self.stop()
+
         os.system(' '.join([
             "haproxy",
             "-f", self.config,
             "-p", self.pid_file,  # PID
             "-sf", _read_file(self.pid_file),
-
         ]))
 
     def status(self):
