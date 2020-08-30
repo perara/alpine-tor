@@ -3,3 +3,4 @@ jinja2
 pyOpenSSL
 stem
 pysocks
+haproxyadmin

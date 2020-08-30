@@ -4,6 +4,7 @@ global
     user root
     group root
     pidfile {{ pid_file }}
+    stats socket {{ socket }} mode 600 level admin
 
 defaults
     mode              tcp
@@ -20,6 +21,7 @@ listen stats
     stats show-node
     stats auth {{ stats_user }}:{{ stats_pass }}
 
+{%- if single_input == 0 %}
 {%- for k, group in groups.items() %}
 listen TOR-{{ group.id }}-in
     bind 0.0.0.0:{{ group.port }}
@@ -27,7 +29,14 @@ listen TOR-{{ group.id }}-in
     mode tcp
     default_backend TOR-{{ group.id }}
 {%- endfor %}
-
+{%- else  %}
+listen TOR-in
+    bind 0.0.0.0:{{ single_input_port }}
+    bind :::{{ single_input_port }}
+    mode tcp
+    default_backend TOR
+{%- endif  %}
+{%- if single_input == 0 %}
 {%- for k, group in groups.items() %}
 backend TOR-{{ group.id }}
     balance roundrobin
@@ -36,7 +45,15 @@ backend TOR-{{ group.id }}
     server {{ proxy[0] }}:{{ proxy[1] }} {{ proxy[0] }}:{{ proxy[1] }}
     {%- endfor %}
 {%- endfor %}
-
-
+{%- else  %}
+backend TOR
+    balance roundrobin
+    mode tcp
+{%- for k, group in groups.items() %}
+    {%- for proxy in group.proxies %}
+    server {{ proxy[0] }}:{{ proxy[1] }} {{ proxy[0] }}:{{ proxy[1] }}
+    {%- endfor %}
+{%- endfor %}
+{%- endif  %}
 
 

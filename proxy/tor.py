@@ -1,8 +1,9 @@
 import random
 import shutil
 import subprocess
-from concurrent.futures.thread import ThreadPoolExecutor
+import threading
 
+from haproxyadmin import haproxy, STATE_DISABLE, STATE_ENABLE
 from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
@@ -85,60 +86,119 @@ def threaded(a):
     return wrapped
 
 
+def timed_task(fn, args=(), interval=300):
+
+    def wrap():
+        fn(*args)
+
+        time.sleep(interval)
+
+    t = Thread(target=wrap, args=())
+    t.daemon = True
+    t.start()
+
+
+class TorGroup(Thread):
+
+    def __init__(self, n_instances: int, group: int, haproxy, restart_interval: tuple):
+        super().__init__()
+        self.n_instances = n_instances
+        self.group = group
+        self.setup_wait = threading.Event()
+        self._haproxy = haproxy
+        self.restart_interval = restart_interval
+        self.instances = {}  # control_port, instance
+
+    def run(self) -> None:
+        self._build_group()
+
+        while True:
+            time.sleep(random.randint(*self.restart_interval))
+            self.restart_group()
+
+    def _build_group(self):
+        temp_instances = []
+        for i in range(self.n_instances):
+            hostname = "127.0.0.1"
+            tor = Tor(hostname=hostname, haproxy=self._haproxy)
+            tor.start()
+            temp_instances.append(tor)
+
+        wait_for(temp_instances)
+
+        for i, tor in enumerate(temp_instances):
+            self.instances[tor.socks_port] = tor
+            self._haproxy.add_proxy(self.group, f"proxy-{self.group}-{i}", tor.hostname,
+                                    tor.http_port if tor.is_http else tor.socks_port)
+
+        self.setup_wait.set()
+
+    def disable_group(self):
+        for tor in self.instances.values():
+            tor.disable()
+
+    def enable_group(self):
+        for tor in self.instances.values():
+            tor.enable()
+
+    def restart_group(self):
+        self.disable_group()
+        for socks_port, tor in self.instances.items():
+            tor.restart()
+
+        self.enable_group()
+
+
 class TorPool(Thread):
 
     def __init__(self,
                  n_instances=int(os.getenv("TOR_INSTANCES")),
                  start_batch=int(os.getenv("TOR_START_BATCH")),
-                 groups=int(os.getenv("TOR_GROUPS"))):
+                 n_groups=int(os.getenv("TOR_GROUPS")),
+                 restart_interval=(
+                     int(os.getenv("TOR_GROUPS_RESTART_INTERVAL_MIN")),
+                     int(os.getenv("TOR_GROUPS_RESTART_INTERVAL_MAX"))
+                 )
+
+                 ):
         super().__init__()
         self.n_instances = n_instances
+        self.n_groups = n_groups
         self.start_batch = start_batch
-        self.invalids = []
-        self.instances = {}  # control_port, instance
-        self.n_groups = groups
+        self.restart_interval = restart_interval  # restart interval on groups.
 
-        self.haproxy = None
-        self.build_haproxy()
+        self.groups = []
+        self.haproxy = HAProxy(tor_groups=self.groups)
+        self._build_groups()
 
-    def build_haproxy(self):
-        self.haproxy = HAProxy()
-        for group in range(self.n_groups):
-            for i in range(self.n_instances):
-                tor = Tor()
-                self.instances[tor.socks_port] = tor
-                self.haproxy.add_proxy(group, f"proxy-{group}-{i}", "127.0.0.1",
-                                       tor.http_port if tor.is_http else tor.socks_port)
+    def _build_groups(self):
+
+        for i_group in range(self.n_groups):
+            group = TorGroup(
+                n_instances=self.n_instances,
+                group=i_group,
+                haproxy=self.haproxy,
+                restart_interval=self.restart_interval
+            )
+            group.daemon = True
+            group.start()
+
+            self.groups.append(group)
+
+        for group in self.groups:
+            group.setup_wait.wait()
+
         self.haproxy.generate_config()
         self.haproxy.start()
 
-
     def run(self) -> None:
 
-        t = Thread(target=self._refresh_invalids, args=())
-        t.start()
-
-        ip_check_interval = 300
-        ip_check_next = time.time()
-
         while True:
-            self._spawn_batch()
-            self._evaluate_duplicates()
-
-            if time.time() >= ip_check_next:
-                try:
-                    self._recheck_ip()
-                except:
-                    pass
-                ip_check_next = time.time() + ip_check_interval
-
             time.sleep(1)
 
-    def _recheck_ip(self):
-        keys = self.instances.keys()
-        for key in keys:
-            self.instances[key]._update_ip()
 
+
+    """
     def _refresh_invalids(self):
 
         def refresh(args):
@@ -177,25 +237,7 @@ class TorPool(Thread):
                 _LOGGER.info("refresh-invalid: before=%s,after=%s,total=%s", num_invalid_start, num_invalids_end, len(self.instances))
 
             time.sleep(1)
-
-    def _spawn_batch(self):
-        not_started = [x for x in self.instances.values() if x.process is None]
-        missing = len(not_started)
-        assert missing >= 0
-        if missing <= 0:
-            return
-
-        started = []
-
-        items = [x for i, x in self.instances.items() if x.process is None]
-        random.shuffle(items)
-        for v in items:
-            if len(started) >= self.start_batch:
-                break
-            started.append(v)
-            v.start()
-
-        wait_for(started)
+        """
 
     def _evaluate_duplicates(self):
         all_instances = [x for x in self.instances.values()]
@@ -216,10 +258,13 @@ class Tor:
     BASE_SOCKS_PORT = int(os.getenv("TOR_SOCKS_PORT_START"))
     BASE_CONTROL_PORT = int(os.getenv("TOR_CONTROL_PORT_START"))
 
-    def __init__(self):
+    def __init__(self, hostname, haproxy):
+        self.hostname = hostname
         self.process = None
         self.ip_address = None
         self.latency = None
+        self.haproxy = haproxy
+        self.haproxy_server = None # Populated when haproxy starts via update_haproxy function
 
         self.data_dir = os.path.join(c_dir, "tor", str(Tor.PROCESS_COUNT))
         self.circuit_dir = os.path.join(self.data_dir, "circuit")
@@ -229,18 +274,10 @@ class Tor:
         self.tor_conf_templ = os.path.join(current_dir, "templates", "torrc.j2")
         self.privoxy_conf_templ = os.path.join(current_dir, "templates", "privoxy.cfg.j2")
 
-        while True:
-            self.socks_port = Tor.BASE_SOCKS_PORT + Tor.PROCESS_COUNT
-            self.control_port = Tor.BASE_CONTROL_PORT + Tor.PROCESS_COUNT
-            self.http_port = Tor.BASE_HTTP_PORT + Tor.PROCESS_COUNT
-            Tor.PROCESS_COUNT += 1
-            if self.try_port(self.socks_port) and self.try_port(self.control_port) and self.try_port(self.http_port):
-                break
+        self._find_available_port()
 
         self.is_http = os.getenv("TOR_HTTP") == '1'
         self.is_privoxy = os.getenv("TOR_HTTP_PRIVOXY") == '1'
-
-        os.makedirs(self.data_dir, exist_ok=True)
 
         if self.is_http:
             self.proxies = dict(
@@ -252,9 +289,37 @@ class Tor:
                 http=f"socks5://127.0.0.1:{self.socks_port}",
                 https=f"socks5://127.0.0.1:{self.socks_port}"
             )
-        self._generate_config()
+        self.generate_config()
 
-    def _generate_config(self):
+        # TASKS
+        timed_task(self.update_ip, args=(), interval=300)
+
+    def _find_available_port(self):
+        while True:
+            self.socks_port = Tor.BASE_SOCKS_PORT + Tor.PROCESS_COUNT
+            self.control_port = Tor.BASE_CONTROL_PORT + Tor.PROCESS_COUNT
+            self.http_port = Tor.BASE_HTTP_PORT + Tor.PROCESS_COUNT
+            Tor.PROCESS_COUNT += 1
+            if self.try_port(self.socks_port) and self.try_port(self.control_port) and self.try_port(self.http_port):
+                break
+
+    @property
+    def haproxy_name(self):
+        return f"{self.hostname}:{self.socks_port}"
+
+    def update_haproxy(self):
+        self.haproxy_server = self.haproxy.socket.server(self.haproxy_name)[0]
+
+    def disable(self):
+        assert self.haproxy_server, "Not set " + self.haproxy_name
+        self.haproxy_server.setstate(STATE_DISABLE)
+
+    def enable(self):
+        assert self.haproxy_server, "Not set"
+        self.haproxy_server.setstate(STATE_ENABLE)
+
+    def generate_config(self):
+        os.makedirs(self.data_dir, exist_ok=True)
         self._generate_privoxy_config()
         self._generate_tor_config()
 
@@ -287,7 +352,6 @@ class Tor:
         print(current_ip, self.ip_address)
         return current_ip == self.ip_address
 
-
     def renew_old(self):
         current_ip = self.ip_address
         command = "authenticate ""\nsignal newnym\nquit"
@@ -300,10 +364,13 @@ class Tor:
     def __str__(self):
         return f"port={self.http_port},address={self.ip_address}"
 
-    def _update_ip(self):
-        response = requests.get("https://api.ipify.org", proxies=self.proxies)
-        self.latency = response.elapsed.total_seconds()
-        self.ip_address = response.text
+    def update_ip(self):
+        try:
+            response = requests.get("https://api.ipify.org", proxies=self.proxies)
+            self.latency = response.elapsed.total_seconds()
+            self.ip_address = response.text
+        except requests.exceptions.ConnectionError:
+            pass
 
     def try_port(self, port):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -318,40 +385,57 @@ class Tor:
 
     @threaded
     def start(self, start_privoxy=True):
+        self.start_(start_privoxy)
+
+    def start_(self, start_privoxy=True):
         if self.is_privoxy:
             privoxy = subprocess.Popen([
                 "privoxy", self.privoxy_conf
             ])
-        try:
-            self.process = launch_tor(args=[
-                "-f", f"{self.tor_conf}",
-                "--SocksPort", f"{self.socks_port}",
-                "--ControlPort", f"{self.control_port}",
-                "--NewCircuitPeriod", os.getenv("TOR_NEW_CIRCUIT_PERIOD"),
-                "--MaxCircuitDirtiness", os.getenv("TOR_MAX_CIRCUIT_DIRTINESS"),
-                "--CircuitBuildTimeout", os.getenv("TOR_CIRCUIT_BUILD_TIMEOUT"),
-                "--DataDirectory", self.circuit_dir,
-                #"--PidFile",  #{pid_file}",
-                "--NumEntryGuards", os.getenv("TOR_NUM_ENTRY_GUARDS"),
-                "--ExitRelay", "0",
-                "--RefuseUnknownExits", "0",
-                "--ClientOnly", "1",
-                "--StrictNodes", "1",
-                # "--ExcludeSingleHopRelays", "0", # TODO - install old
-                # "--AllowSingleHopCircuits",  "1", # TODO obsolete
-                # "--Log", "debug",
-                # "--RunAsDaemon", "1",
-            ], take_ownership=True)
-            self.process.stdout = sys.stdout
-        except OSError as e:
-            print(self.socks_port, self.control_port)
-            return self
-        self._update_ip()
+
+        while True:
+
+            try:
+                self.process = launch_tor(args=[
+                    "-f", f"{self.tor_conf}",
+                    "--SocksPort", f"{self.socks_port}",
+                    "--ControlPort", f"{self.control_port}",
+                    "--NewCircuitPeriod", os.getenv("TOR_NEW_CIRCUIT_PERIOD"),
+                    "--MaxCircuitDirtiness", os.getenv("TOR_MAX_CIRCUIT_DIRTINESS"),
+                    "--CircuitBuildTimeout", os.getenv("TOR_CIRCUIT_BUILD_TIMEOUT"),
+                    "--DataDirectory", self.circuit_dir,
+                    #"--PidFile",  #{pid_file}",
+                    "--NumEntryGuards", os.getenv("TOR_NUM_ENTRY_GUARDS"),
+                    "--ExitRelay", "0",
+                    "--RefuseUnknownExits", "0",
+                    "--ClientOnly", "1",
+                    "--StrictNodes", "1",
+                    # "--ExcludeSingleHopRelays", "0", # TODO - install old
+                    # "--AllowSingleHopCircuits",  "1", # TODO obsolete
+                    # "--Log", "debug",
+                    # "--RunAsDaemon", "1",
+                ], take_ownership=True)
+                self.process.stdout = sys.stdout
+                break
+
+            except OSError as e:
+                print("ports is not available.", self.socks_port, self.control_port)
+                self._find_available_port()
+                return self
+
+        self.update_ip()
+        print("server", self.socks_port, self.control_port)
         return self
 
     def kill(self):
+        print(self.process)
         os.kill(self.process.pid, 9)
         shutil.rmtree(self.circuit_dir)
+
+    def restart(self):
+        self.kill()
+        self.generate_config()
+        self.start_()
 
     def status(self):
         pass
@@ -360,10 +444,11 @@ class Tor:
 class HAProxy:
     HAPROXY_PORT = int(os.getenv("HAPROXY_GROUP_PORT_START"))
 
-    def __init__(self):
+    def __init__(self, tor_groups: list):
         self.process = None
         self.pid_file = os.path.join(c_dir, "haproxy", "haproxy.pid")
-        self.socket = os.path.join(c_dir, "haproxy", "haproxy.socket")
+        self.socket_path = os.path.join(c_dir, "haproxy")
+        self.socket_file = os.path.join(self.socket_path, "haproxy.socket")
         self.config_template = os.path.join(current_dir, "templates", "haproxy.cfg.j2")
         self.config = os.path.join(c_dir, "haproxy", "haproxy.cfg")
         self.ssl_pem = os.path.join(c_dir, "haproxy", "server.pem")
@@ -371,6 +456,8 @@ class HAProxy:
         self.public_key = os.path.join(c_dir, "haproxy", "server.crt")
         self.proxies = []
         self.groups = {}
+        self.tor_groups = tor_groups # List of tor objects
+        self.socket = haproxy.HAProxy(socket_dir=self.socket_path)
 
         self._generate_ssl_keys()
 
@@ -409,8 +496,11 @@ class HAProxy:
 
     def generate_config(self):
         templ = Template(_read_file(self.config_template))
+        single_input = int(os.getenv("HAPROXY_SINGLE_INPUT"))
+
         config = templ.render(
             pid_file=self.pid_file,
+            socket=self.socket_file,
             stats_port=os.environ["HAPROXY_STATS_PORT"],
             stats_user=os.environ["HAPROXY_STATS_USER"],
             stats_pass=os.environ["HAPROXY_STATS_PASS"],
@@ -420,6 +510,8 @@ class HAProxy:
             retries=os.environ["HAPROXY_RETRIES"],
             maxconn=os.environ["HAPROXY_MAXCONN"],
             groups=self.groups,
+            single_input_port=self.groups[0]["port"],
+            single_input=single_input,
             cert=self.ssl_pem
         )
 
@@ -445,7 +537,13 @@ class HAProxy:
             "-sf", _read_file(self.pid_file),
         ]))
 
-    def status(self):
+        for tor_group in self.tor_groups:
+            for tor in tor_group.instances.values():
+                tor.update_haproxy()
+                tor.enable()
+
+
+def status(self):
         pass
 
 
