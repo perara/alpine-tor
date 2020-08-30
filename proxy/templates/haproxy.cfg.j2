@@ -51,7 +51,7 @@ backend TOR
     mode tcp
 {%- for k, group in groups.items() %}
     {%- for proxy in group.proxies %}
-    server {{ proxy[0] }}:{{ proxy[1] }} {{ proxy[0] }}:{{ proxy[1] }}
+    server {{ proxy[0] }}:{{ proxy[1] }} {{ proxy[0] }}:{{ proxy[1] }} check
     {%- endfor %}
 {%- endfor %}
 {%- endif  %}
