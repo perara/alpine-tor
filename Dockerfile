@@ -1,5 +1,5 @@
 FROM alpine:edge
-
+RUN mkdir -p /config
 RUN mkdir -p /app
 COPY proxy /app
 COPY proxy/templates /app/templates
