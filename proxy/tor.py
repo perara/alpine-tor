@@ -457,7 +457,8 @@ class HAProxy:
         self.proxies = []
         self.groups = {}
         self.tor_groups = tor_groups # List of tor objects
-        self.socket = haproxy.HAProxy(socket_dir=self.socket_path)
+        os.makedirs(self.socket_path, exist_ok=True)
+        self.socket = None
 
         self._generate_ssl_keys()
 
@@ -536,6 +537,8 @@ class HAProxy:
             "-p", self.pid_file,  # PID
             "-sf", _read_file(self.pid_file),
         ]))
+
+        self.socket = haproxy.HAProxy(socket_dir=self.socket_path)
 
         for tor_group in self.tor_groups:
             for tor in tor_group.instances.values():
